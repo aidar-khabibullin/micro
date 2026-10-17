@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
 	orderHandler "github.com/aidar/order/pkg/handler"
 	inventoryv1 "github.com/aidar/shared/pkg/proto/inventory/v1"
@@ -16,23 +22,60 @@ import (
 const (
 	inventoryServiceAddress = "localhost:50051"
 	paymentServiceAddress   = "localhost:50052"
+	httpAddress             = ":8080"
+
+	// Таймауты HTTP сервера
+	readHeaderTimeout = 5 * time.Second // защита от Slowloris
+	readTimeout       = 10 * time.Second
+	writeTimeout      = 10 * time.Second
+	idleTimeout       = 60 * time.Second
+	shutdownTimeout   = 10 * time.Second
 )
 
-func main() {
-	// TODO: Настроить gRPC клиент с параметрами keepalive
-	// Подумайте, какие параметры стоит задать для gRPC клиента
-	// См. examples/week_1/GRPC_CONNECTIONS.md
+// Параметры keepalive gRPC клиентов.
+// grpcClientKeepaliveTime не меньше MinTime серверов (5 минут), иначе сервер закроет
+// соединение с ENHANCE_YOUR_CALM.
+const (
+	grpcClientKeepaliveTime    = 5 * time.Minute
+	grpcClientKeepaliveTimeout = 3 * time.Second
+)
 
+var clientKeepalive = keepalive.ClientParameters{
+	Time:                grpcClientKeepaliveTime,
+	Timeout:             grpcClientKeepaliveTimeout,
+	PermitWithoutStream: true,
+}
+
+func main() {
+	if run() != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Создать gRPC соединение с InventoryService
-	inventoryConn, err := grpc.NewClient(inventoryServiceAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	inventoryConn, err := grpc.NewClient(
+		inventoryServiceAddress,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(clientKeepalive),
+	)
 	if err != nil {
 		slog.Error("не удалось подключиться к InventoryService", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer inventoryConn.Close()
 
-	// TODO: Создать gRPC клиент PaymentService
+	// Создать gRPC соединение с PaymentService
+	paymentConn, err := grpc.NewClient(
+		paymentServiceAddress,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(clientKeepalive),
+	)
+	if err != nil {
+		slog.Error("не удалось подключиться к PaymentService", "error", err)
+		return err
+	}
+	defer paymentConn.Close()
 
 	// Создаём хранилище и обработчик
 	store := orderHandler.NewOrderStore()
@@ -42,35 +85,56 @@ func main() {
 		store,
 	)
 
-	// TODO: Сгенерировать код ogen из OpenAPI спецификации
-	// Команда: task ogen:gen
-
 	// Создать OpenAPI сервер
 	orderServer, err := orderHandler.SetupServer(h)
 	if err != nil {
 		slog.Error("ошибка создания сервера OpenAPI", "error", err)
-		os.Exit(1)
+		return err
 	}
 
-	// TODO: Настроить HTTP сервер с таймаутами
-	// Создайте &http.Server{...} с явными таймаутами вместо http.ListenAndServe(...)
-	// Минимальный набор: ReadHeaderTimeout (защита от Slowloris), ReadTimeout, WriteTimeout, IdleTimeout
-	// Без ReadHeaderTimeout сервер уязвим к атаке Slowloris (медленная отправка заголовков)
-	// См. examples/week_1/HTTP_SERVER.md
+	httpServer := &http.Server{
+		Addr:              httpAddress,
+		Handler:           orderServer,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 
-	// TODO: Реализовать graceful shutdown для HTTP сервера
-	// При получении сигнала SIGINT/SIGTERM сервер должен:
-	// 1. Перестать принимать новые соединения
-	// 2. Дождаться завершения текущих запросов (с таймаутом)
-	// 3. Закрыть gRPC соединения
-	// 4. Корректно завершить работу
-	// Подсказка: используйте signal.NotifyContext и httpServer.Shutdown(ctx)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	slog.Info("запуск OrderService", "port", 8080)
 
-	err = http.ListenAndServe(":8080", orderServer)
-	if err != nil {
-		slog.Error("ошибка запуска сервера", "error", err)
-		os.Exit(1)
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err = <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("ошибка запуска сервера", "error", err)
+			return err
+		}
+
+		return nil
+	case <-ctx.Done():
 	}
+
+	slog.Info("получен сигнал завершения, останавливаем OrderService")
+
+	// Shutdown перестаёт принимать новые соединения и ждёт завершения текущих запросов.
+	// gRPC соединения закрываются через defer после выхода из main.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err = httpServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("ошибка graceful shutdown", "error", err)
+		return err
+	}
+
+	slog.Info("OrderService остановлен")
+
+	return nil
 }

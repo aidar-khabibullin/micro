@@ -2,16 +2,22 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	orderv1 "github.com/aidar/shared/pkg/openapi/order/v1"
 	inventoryv1 "github.com/aidar/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/aidar/shared/pkg/proto/payment/v1"
 )
+
+// grpcCallTimeout — таймаут на один вызов в Inventory/Payment сервисы
+const grpcCallTimeout = 5 * time.Second
 
 // OrderStatus — статус заказа
 type OrderStatus string
@@ -136,36 +142,221 @@ func (h *handler) GetOrder(_ context.Context, params orderv1.GetOrderParams) (or
 	}, nil
 }
 
-// TODO: Реализовать остальные методы интерфейса orderv1.Handler:
-//
 // CreateOrder реализует операцию createOrder
-// POST /api/v1/orders
-// func (h *handler) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (orderv1.CreateOrderRes, error) {
-//     // 1. Валидация: hull_uuid и engine_uuid обязательны
-//     // 2. Получить детали через InventoryService.ListParts
-//     // 3. Проверить stock_quantity > 0
-//     // 4. Вычислить total_price
-//     // 5. Сгенерировать order_uuid (UUID v4)
-//     // 6. Создать заказ со статусом PENDING_PAYMENT
-//     // 7. Сохранить в store
-//     // 8. Вернуть order_uuid и total_price
-// }
-//
+// POST /api/v1/orders.
+func (h *handler) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (orderv1.CreateOrderRes, error) {
+	// 1. Валидация: hull_uuid и engine_uuid обязательны
+	if req.HullUUID == uuid.Nil || req.EngineUUID == uuid.Nil {
+		return &orderv1.CreateOrderBadRequest{
+			Code:    http.StatusBadRequest,
+			Message: "hull_uuid и engine_uuid обязательны",
+		}, nil
+	}
+
+	shieldUUID := optUUIDToPtr(req.ShieldUUID)
+	weaponUUID := optUUIDToPtr(req.WeaponUUID)
+
+	partUUIDs := []string{req.HullUUID.String(), req.EngineUUID.String()}
+	if shieldUUID != nil {
+		partUUIDs = append(partUUIDs, shieldUUID.String())
+	}
+	if weaponUUID != nil {
+		partUUIDs = append(partUUIDs, weaponUUID.String())
+	}
+
+	// 2. Получить детали через InventoryService.ListParts
+	callCtx, cancel := context.WithTimeout(ctx, grpcCallTimeout)
+	defer cancel()
+
+	resp, err := h.inventoryClient.ListParts(callCtx, &inventoryv1.ListPartsRequest{Uuids: partUUIDs})
+	if err != nil {
+		switch status.Code(err) {
+		case codes.NotFound:
+			return &orderv1.CreateOrderNotFound{Code: http.StatusNotFound, Message: "компонент не найден"}, nil
+		case codes.InvalidArgument:
+			return &orderv1.CreateOrderBadRequest{Code: http.StatusBadRequest, Message: "неверный формат uuid компонента"}, nil
+		default:
+			slog.ErrorContext(ctx, "не удалось получить компоненты со склада", "error", err)
+
+			return &orderv1.CreateOrderInternalServerError{
+				Code:    http.StatusInternalServerError,
+				Message: "не удалось получить компоненты со склада",
+			}, nil
+		}
+	}
+
+	if len(resp.GetParts()) != len(partUUIDs) {
+		return &orderv1.CreateOrderNotFound{Code: http.StatusNotFound, Message: "компонент не найден"}, nil
+	}
+
+	// 3. Проверить stock_quantity > 0
+	// 4. Вычислить total_price
+	var totalPrice int64
+	for _, part := range resp.GetParts() {
+		if part.GetStockQuantity() <= 0 {
+			return &orderv1.CreateOrderConflict{
+				Code:    http.StatusConflict,
+				Message: "компонент отсутствует на складе: " + part.GetName(),
+			}, nil
+		}
+
+		totalPrice += part.GetPrice()
+	}
+
+	// 5. Сгенерировать order_uuid (UUID v4)
+	orderUUID := uuid.New()
+
+	// 6. Создать заказ со статусом PENDING_PAYMENT
+	order := Order{
+		OrderUUID:  orderUUID,
+		HullUUID:   req.HullUUID,
+		EngineUUID: req.EngineUUID,
+		ShieldUUID: shieldUUID,
+		WeaponUUID: weaponUUID,
+		TotalPrice: totalPrice,
+		Status:     OrderStatusPendingPayment,
+		CreatedAt:  time.Now(),
+	}
+
+	// 7. Сохранить в store
+	h.store.mu.Lock()
+	h.store.orders[orderUUID] = order
+	h.store.mu.Unlock()
+
+	// 8. Вернуть order_uuid и total_price
+	return &orderv1.CreateOrderResponse{
+		OrderUUID:  orderUUID,
+		TotalPrice: totalPrice,
+	}, nil
+}
+
 // PayOrder реализует операцию payOrder
-// POST /api/v1/orders/{order_uuid}/pay
-// func (h *handler) PayOrder(ctx context.Context, req *orderv1.PayOrderRequest, params orderv1.PayOrderParams) (orderv1.PayOrderRes, error) {
-//     // 1. Найти заказ в store
-//     // 2. Проверить статус == PENDING_PAYMENT
-//     // 3. Вызвать h.paymentClient.PayOrder для обработки платежа
-//     // 4. Обновить статус на PAID и сохранить transaction_uuid
-//     // 5. Вернуть transaction_uuid
-// }
-//
+// POST /api/v1/orders/{order_uuid}/pay.
+func (h *handler) PayOrder(
+	ctx context.Context,
+	req *orderv1.PayOrderRequest,
+	params orderv1.PayOrderParams,
+) (orderv1.PayOrderRes, error) {
+	// 1. Найти заказ в store
+	h.store.mu.RLock()
+	order, ok := h.store.orders[params.OrderUUID]
+	h.store.mu.RUnlock()
+
+	if !ok {
+		return &orderv1.PayOrderNotFound{Code: http.StatusNotFound, Message: "заказ не найден"}, nil
+	}
+
+	// 2. Проверить статус == PENDING_PAYMENT
+	if order.Status != OrderStatusPendingPayment {
+		return &orderv1.PayOrderConflict{
+			Code:    http.StatusConflict,
+			Message: "заказ нельзя оплатить в статусе " + string(order.Status),
+		}, nil
+	}
+
+	// 3. Вызвать h.paymentClient.PayOrder для обработки платежа
+	callCtx, cancel := context.WithTimeout(ctx, grpcCallTimeout)
+	defer cancel()
+
+	payResp, err := h.paymentClient.PayOrder(callCtx, &paymentv1.PayOrderRequest{
+		OrderUuid:     order.OrderUUID.String(),
+		PaymentMethod: toProtoPaymentMethod(req.PaymentMethod),
+	})
+	if err != nil {
+		if status.Code(err) == codes.InvalidArgument {
+			return &orderv1.PayOrderBadRequest{Code: http.StatusBadRequest, Message: status.Convert(err).Message()}, nil
+		}
+
+		slog.ErrorContext(ctx, "не удалось провести оплату", "order_uuid", order.OrderUUID, "error", err)
+
+		return &orderv1.PayOrderInternalServerError{
+			Code:    http.StatusInternalServerError,
+			Message: "не удалось провести оплату",
+		}, nil
+	}
+
+	transactionUUID, err := uuid.Parse(payResp.GetTransactionUuid())
+	if err != nil {
+		return &orderv1.PayOrderInternalServerError{
+			Code:    http.StatusInternalServerError,
+			Message: "сервис оплаты вернул неверный transaction_uuid",
+		}, nil
+	}
+
+	// 4. Обновить статус на PAID и сохранить transaction_uuid
+	paymentMethod := PaymentMethod(req.PaymentMethod)
+
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+
+	// Пока шёл вызов в PaymentService, заказ могли отменить или оплатить параллельно
+	order = h.store.orders[params.OrderUUID]
+	if order.Status != OrderStatusPendingPayment {
+		return &orderv1.PayOrderConflict{
+			Code:    http.StatusConflict,
+			Message: "заказ нельзя оплатить в статусе " + string(order.Status),
+		}, nil
+	}
+
+	order.Status = OrderStatusPaid
+	order.TransactionUUID = &transactionUUID
+	order.PaymentMethod = &paymentMethod
+	h.store.orders[params.OrderUUID] = order
+
+	// 5. Вернуть transaction_uuid
+	return &orderv1.PayOrderResponse{TransactionUUID: transactionUUID}, nil
+}
+
 // CancelOrder реализует операцию cancelOrder
-// POST /api/v1/orders/{order_uuid}/cancel
-// func (h *handler) CancelOrder(ctx context.Context, params orderv1.CancelOrderParams) (orderv1.CancelOrderRes, error) {
-//     // 1. Найти заказ в store
-//     // 2. Проверить статус == PENDING_PAYMENT
-//     // 3. Обновить статус на CANCELLED
-//     // 4. Вернуть success
-// }
+// POST /api/v1/orders/{order_uuid}/cancel.
+func (h *handler) CancelOrder(_ context.Context, params orderv1.CancelOrderParams) (orderv1.CancelOrderRes, error) {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+
+	// 1. Найти заказ в store
+	order, ok := h.store.orders[params.OrderUUID]
+	if !ok {
+		return &orderv1.CancelOrderNotFound{Code: http.StatusNotFound, Message: "заказ не найден"}, nil
+	}
+
+	// 2. Проверить статус == PENDING_PAYMENT
+	if order.Status != OrderStatusPendingPayment {
+		return &orderv1.CancelOrderConflict{
+			Code:    http.StatusConflict,
+			Message: "заказ нельзя отменить в статусе " + string(order.Status),
+		}, nil
+	}
+
+	// 3. Обновить статус на CANCELLED
+	order.Status = OrderStatusCancelled
+	h.store.orders[params.OrderUUID] = order
+
+	// 4. Вернуть success
+	return &orderv1.CancelOrderResponse{}, nil
+}
+
+// optUUIDToPtr преобразует опциональный nullable UUID в указатель (nil, если значение не задано)
+func optUUIDToPtr(v orderv1.OptNilUUID) *uuid.UUID {
+	id, ok := v.Get()
+	if !ok {
+		return nil
+	}
+
+	return &id
+}
+
+// toProtoPaymentMethod преобразует способ оплаты из OpenAPI в gRPC enum
+func toProtoPaymentMethod(m orderv1.PaymentMethod) paymentv1.PaymentMethod {
+	switch m {
+	case orderv1.PaymentMethodCARD:
+		return paymentv1.PaymentMethod_PAYMENT_METHOD_CARD
+	case orderv1.PaymentMethodSBP:
+		return paymentv1.PaymentMethod_PAYMENT_METHOD_SBP
+	case orderv1.PaymentMethodCREDITCARD:
+		return paymentv1.PaymentMethod_PAYMENT_METHOD_CREDIT_CARD
+	case orderv1.PaymentMethodINVESTORMONEY:
+		return paymentv1.PaymentMethod_PAYMENT_METHOD_INVESTOR_MONEY
+	default:
+		return paymentv1.PaymentMethod_PAYMENT_METHOD_UNSPECIFIED
+	}
+}

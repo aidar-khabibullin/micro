@@ -190,6 +190,5 @@ formatters: # Форматтеры кода (проверка стиля)
       sections: # Порядок группировки импортов
         - Standard  # Стандартная библиотека
         - Default   # Сторонние зависимости
-        # TODO: Поменяй prefix на свой модуль (github.com/aidar → github.com/твой-ник/твой-модуль)
         - Prefix(github.com/aidar)  # Локальные импорты проекта
       no-inline-comments: false  # Разрешить комментарии после импортов (true — запретит)

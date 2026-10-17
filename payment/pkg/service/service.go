@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -25,17 +26,26 @@ func (s *server) PayOrder(
 	ctx context.Context,
 	req *paymentv1.PayOrderRequest,
 ) (*paymentv1.PayOrderResponse, error) {
-	// TODO: Реализовать метод
-	// 1. Проверить, что order_uuid не пустой → INVALID_ARGUMENT
-	// 2. Проверить, что payment_method != UNSPECIFIED → INVALID_ARGUMENT
-	// 3. Проверить формат UUID → INVALID_ARGUMENT
-	// 4. Сгенерировать transaction_uuid (UUID v4)
-	// 5. Вывести в лог: "оплата прошла успешно, order_uuid: X, transaction_uuid: Y"
-	// 6. Вернуть transaction_uuid
+	if req.GetOrderUuid() == "" {
+		return nil, status.Error(codes.InvalidArgument, "order_uuid не может быть пустым")
+	}
 
-	slog.Info("оплата прошла успешно",
+	if req.GetPaymentMethod() == paymentv1.PaymentMethod_PAYMENT_METHOD_UNSPECIFIED {
+		return nil, status.Error(codes.InvalidArgument, "payment_method не указан")
+	}
+
+	if _, err := uuid.Parse(req.GetOrderUuid()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "order_uuid имеет неверный формат UUID")
+	}
+
+	transactionUUID := uuid.NewString()
+
+	slog.InfoContext(
+		ctx,
+		"оплата прошла успешно",
 		"order_uuid", req.GetOrderUuid(),
+		"transaction_uuid", transactionUUID,
 	)
 
-	return nil, status.Error(codes.Unimplemented, "метод PayOrder не реализован")
+	return &paymentv1.PayOrderResponse{TransactionUuid: transactionUUID}, nil
 }

@@ -2,7 +2,10 @@ module github.com/aidar/payment
 
 go 1.26.0
 
-require google.golang.org/grpc v1.79.2
+require (
+	github.com/google/uuid v1.6.0
+	google.golang.org/grpc v1.79.2
+)
 
 require (
 	go.opentelemetry.io/otel v1.42.0 // indirect
