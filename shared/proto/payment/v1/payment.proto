@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package payment.v1;
 
-// TODO: Заменить на актуальный go_package
 option go_package = "github.com/aidar/shared/pkg/proto/payment/v1;paymentv1";
 
 // PaymentService обрабатывает оплату заказов
@@ -13,10 +12,16 @@ service PaymentService {
 
 // Способ оплаты
 enum PaymentMethod {
+  // Не указан
   PAYMENT_METHOD_UNSPECIFIED = 0;
+  // Банковская карта
   PAYMENT_METHOD_CARD = 1;
+  // Система быстрых платежей
   PAYMENT_METHOD_SBP = 2;
-  // TODO: Добавить остальные способы оплаты из описания задания
+  // Кредитная карта
+  PAYMENT_METHOD_CREDIT_CARD = 3;
+  // Деньги инвестора
+  PAYMENT_METHOD_INVESTOR_MONEY = 4;
 }
 
 // Запрос на оплату заказа
@@ -24,7 +29,12 @@ message PayOrderRequest {
   // UUID заказа
   string order_uuid = 1;
 
-  // TODO: Добавить остальные поля из описания задания
+  // Способ оплаты
+  PaymentMethod payment_method = 2;
 }
 
-// TODO: Реализовать PayOrderResponse
+// Ответ на оплату заказа
+message PayOrderResponse {
+  // UUID транзакции оплаты (v4)
+  string transaction_uuid = 1;
+}
