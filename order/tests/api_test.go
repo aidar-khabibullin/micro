@@ -1364,3 +1364,21 @@ func TestInventory_ListParts_ByUuids_EmptyList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, resp.GetParts(), 7)
 }
+
+func TestOrder_BadRequest_ErrorBodyFormat(t *testing.T) {
+	httpReq, err := http.NewRequest(http.MethodPost, orderBaseURL()+"/api/v1/orders", bytes.NewReader([]byte("{}")))
+	require.NoError(t, err)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(httpReq)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+
+	var errResp ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&errResp))
+	assert.Equal(t, http.StatusBadRequest, errResp.Code)
+	assert.Equal(t, "некорректный запрос", errResp.Message)
+}
