@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ogen-go/ogen/ogenerrors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -88,7 +90,32 @@ func NewHandler(
 
 // SetupServer создаёт OpenAPI сервер на основе обработчика
 func SetupServer(h *handler) (*orderv1.Server, error) {
-	return orderv1.NewServer(h)
+	return orderv1.NewServer(h, orderv1.WithErrorHandler(errorHandler))
+}
+
+// errorHandler формирует ответ на ошибки ogen (разбор параметров и тела запроса, валидация)
+// в формате схемы Error: {"code": ..., "message": ...}.
+// Технические детали ошибки пишутся в лог, клиенту отдаётся сообщение на русском.
+func errorHandler(ctx context.Context, w http.ResponseWriter, _ *http.Request, err error) {
+	code := ogenerrors.ErrorCode(err)
+
+	message := "внутренняя ошибка сервера"
+
+	switch code {
+	case http.StatusBadRequest:
+		message = "некорректный запрос"
+	case http.StatusUnsupportedMediaType:
+		message = "неподдерживаемый тип содержимого"
+	}
+
+	slog.WarnContext(ctx, "ошибка обработки запроса", "code", code, "error", err)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+
+	if encodeErr := json.NewEncoder(w).Encode(orderv1.Error{Code: code, Message: message}); encodeErr != nil {
+		slog.ErrorContext(ctx, "не удалось записать ответ с ошибкой", "error", encodeErr)
+	}
 }
 
 // GetOrder реализует операцию getOrder (пример реализации)

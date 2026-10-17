@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/aidar/shared v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.42.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.42.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
