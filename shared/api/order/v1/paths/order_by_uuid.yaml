@@ -1,0 +1,22 @@
+parameters:
+  - $ref: ../params/order_uuid.yaml
+
+get:
+  summary: Получить заказ по UUID
+  description: Возвращает полную информацию о заказе на постройку космического корабля
+  operationId: getOrder
+  tags:
+    - Orders
+  responses:
+    '200':
+      description: Заказ успешно найден
+      content:
+        application/json:
+          schema:
+            $ref: ../components/order_dto.yaml
+    '400':
+      $ref: '../components/responses/bad_request.yaml'
+    '404':
+      $ref: '../components/responses/order_not_found.yaml'
+    '500':
+      $ref: '../components/responses/internal_server_error.yaml'

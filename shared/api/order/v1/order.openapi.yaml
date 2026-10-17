@@ -1,0 +1,32 @@
+openapi: 3.0.3
+info:
+  title: Order Service API
+  version: 1.0.0
+  description: |
+    API для управления заказами на постройку космических кораблей.
+
+    Позволяет создавать заказы, получать информацию о них,
+    оплачивать и отменять заказы.
+
+# servers - опциональная секция, указывает базовые URL для API.
+# Используется:
+# - при генерации клиента (дефолтный baseURL)
+# - в Swagger UI / Redoc (выбор окружения)
+# - для документирования доступных окружений (dev, staging, prod)
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: Orders
+    description: Операции с заказами — создание, получение, оплата и отмена
+
+paths:
+  /api/v1/orders:
+    $ref: ./paths/orders.yaml
+  /api/v1/orders/{order_uuid}:
+    $ref: ./paths/order_by_uuid.yaml
+  /api/v1/orders/{order_uuid}/pay:
+    $ref: ./paths/order_pay.yaml
+  /api/v1/orders/{order_uuid}/cancel:
+    $ref: ./paths/order_cancel.yaml

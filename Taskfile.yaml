@@ -1,0 +1,175 @@
+# TODO: Не забудь поменять имя модуля github.com/aidar на своё
+#       и обновить все импорты в коде!
+#       Также обнови prefix в команде format (gci) и в .golangci.yml
+
+version: '3'
+
+vars:
+  GO_VERSION: '1.26.0'
+  GOLANGCI_LINT_VERSION: 'v2.12.2'
+  GCI_VERSION: 'v0.14.0'
+  GOFUMPT_VERSION: 'v0.10.0'
+  BUF_VERSION: '1.69.0'
+  PROTOC_GEN_GO_VERSION: 'v1.36.11'
+  PROTOC_GEN_GO_GRPC_VERSION: 'v1.6.1'
+  OGEN_VERSION: 'v1.20.3'
+
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+  GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint'
+  GCI: '{{.BIN_DIR}}/gci'
+  GOFUMPT: '{{.BIN_DIR}}/gofumpt'
+  BUF: '{{.BIN_DIR}}/buf'
+  PROTOC_GEN_GO: '{{.BIN_DIR}}/protoc-gen-go'
+  PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
+  OGEN: '{{.BIN_DIR}}/ogen'
+
+  MODULES: order inventory payment
+
+tasks:
+  formatters:install:
+    desc: "Устанавливает gofumpt и gci"
+    cmds:
+      - echo '📦 Устанавливаем gofumpt...'
+      - GOBIN={{.BIN_DIR}} go install mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}}
+      - echo '📦 Устанавливаем gci...'
+      - GOBIN={{.BIN_DIR}} go install github.com/daixiang0/gci@{{.GCI_VERSION}}
+    status:
+      - test -x {{.GOFUMPT}}
+      - test -x {{.GCI}}
+
+  golangci-lint:install:
+    desc: "Устанавливает golangci-lint"
+    cmds:
+      - echo '📦 Устанавливаем golangci-lint...'
+      - GOBIN={{.BIN_DIR}} go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+    status:
+      - test -x {{.GOLANGCI_LINT}}
+
+  buf:install:
+    desc: "Устанавливает buf"
+    cmds:
+      - echo '📦 Устанавливаем buf...'
+      - GOBIN={{.BIN_DIR}} go install github.com/bufbuild/buf/cmd/buf@v{{.BUF_VERSION}}
+    status:
+      - test -x {{.BUF}}
+
+  proto:install-plugins:
+    desc: "Устанавливает protoc-плагины"
+    cmds:
+      - echo '📦 Устанавливаем protoc-gen-go...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - echo '📦 Устанавливаем protoc-gen-go-grpc...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+    status:
+      - test -x {{.PROTOC_GEN_GO}}
+      - test -x {{.PROTOC_GEN_GO_GRPC}}
+
+  ogen:install:
+    desc: "Устанавливает ogen"
+    cmds:
+      - echo '📦 Устанавливаем ogen...'
+      - GOBIN={{.BIN_DIR}} go install github.com/ogen-go/ogen/cmd/ogen@{{.OGEN_VERSION}}
+    status:
+      - test -x {{.OGEN}}
+
+  setup:
+    desc: "Устанавливает все инструменты"
+    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install]
+
+  format:
+    desc: "Форматирует код (gofumpt + gci)"
+    deps: [formatters:install]
+    cmds:
+      - echo '🧹 Форматируем код через gofumpt...'
+      - find . -type f -name '*.go' ! -path '*/mocks/*' ! -path '*/pkg/proto/*' ! -path '*/pkg/openapi/*' -exec {{.GOFUMPT}} -extra -w {} +
+      - echo '📦 Сортируем импорты через gci...'
+      # TODO: Поменяй prefix на свой модуль
+      - find . -type f -name '*.go' ! -path '*/mocks/*' ! -path '*/pkg/proto/*' ! -path '*/pkg/openapi/*' -exec {{.GCI}} write -s standard -s default -s "prefix(github.com/aidar)" {} +
+
+  build:
+    desc: "Собирает все Go-модули (go build)"
+    cmds:
+      - go build ./order/... ./inventory/... ./payment/...
+
+  lint:
+    desc: "Запускает golangci-lint"
+    deps: [golangci-lint:install]
+    cmds:
+      - '{{.GOLANGCI_LINT}} run --allow-parallel-runners order/... inventory/... payment/... --config=.golangci.yml'
+
+  proto:format:
+    desc: "Форматирует .proto-файлы (buf format)"
+    deps: [buf:install]
+    dir: shared/proto
+    cmds:
+      - echo '🧹 Форматируем .proto-файлы...'
+      - '{{.BUF}} format -w'
+
+  proto:lint:
+    desc: "Проверяет .proto-файлы линтером"
+    deps: [buf:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔍 Проверяем .proto-файлы...'
+      - '{{.BUF}} lint'
+
+  proto:gen:
+    desc: "Генерирует Go-код из .proto"
+    deps: [buf:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔨 Генерируем Go-код из .proto...'
+      - '{{.BUF}} generate'
+
+  ogen:gen:
+    desc: "Генерирует Go-код из OpenAPI"
+    deps: [ogen:install]
+    dir: shared
+    cmds:
+      - echo '🔨 Генерируем Go-код из OpenAPI...'
+      - '{{.OGEN}} -target ./pkg/openapi/order/v1 -package orderv1 -clean ./api/order/v1/order.openapi.yaml 2>/dev/null'
+
+  gen:
+    desc: "Генерирует весь код"
+    cmds:
+      - task: proto:gen
+      - task: ogen:gen
+
+  deps:update:
+    desc: "Обновляет зависимости"
+    cmds:
+      - echo '🔄 Синхронизируем go.work...'
+      - go work sync
+      - echo '🔄 Обновляем зависимости в сервисах...'
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && go mod tidy -compat={{.GO_VERSION}}
+      - echo '🔄 Обновляем зависимости в shared (proto/openapi)...'
+      - cd shared && go mod tidy -compat={{.GO_VERSION}}
+
+  run:inventory:
+    desc: "Запускает InventoryService (gRPC :50051)"
+    dir: inventory
+    cmds:
+      - go run ./cmd
+
+  run:payment:
+    desc: "Запускает PaymentService (gRPC :50052)"
+    dir: payment
+    cmds:
+      - go run ./cmd
+
+  run:order:
+    desc: "Запускает OrderService (HTTP :8080)"
+    dir: order
+    cmds:
+      - go run ./cmd
+
+  test:
+    desc: "Запускает все тесты (на week_1 алиас на test:api)"
+    cmds:
+      - task: test:api
+
+  test:api:
+    desc: "Запускает API-тесты"
+    cmds:
+      - go test -v ./order/tests/...

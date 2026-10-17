@@ -1,0 +1,15 @@
+type: object
+required:
+  - order_uuid
+  - total_price
+properties:
+  order_uuid:
+    type: string
+    format: uuid
+    description: UUID созданного заказа (v4)
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  total_price:
+    type: integer
+    format: int64
+    description: Итоговая стоимость в копейках
+    example: 1200000

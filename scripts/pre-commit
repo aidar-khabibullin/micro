@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Git pre-commit hook
+# Копировать в .git/hooks/pre-commit
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "🧼 Форматирование кода..."
+task -d "$REPO_ROOT" format
+
+echo "🔍 Проверка линтером..."
+task -d "$REPO_ROOT" lint
+
+echo "✅ Всё чисто!"

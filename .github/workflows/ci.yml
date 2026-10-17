@@ -1,0 +1,26 @@
+name: "CI"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "Build"
+    uses: ./.github/workflows/build.yml
+
+  lint:
+    name: "Lint"
+    needs: build
+    uses: ./.github/workflows/lint.yml
+
+  test-api:
+    name: "Test API"
+    needs: build
+    uses: ./.github/workflows/test-api.yml

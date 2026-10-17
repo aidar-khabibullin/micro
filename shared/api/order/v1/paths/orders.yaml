@@ -1,0 +1,27 @@
+post:
+  summary: Создать заказ
+  description: Создаёт новый заказ на постройку космического корабля
+  operationId: createOrder
+  tags:
+    - Orders
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          $ref: '../components/create_order_request.yaml'
+  responses:
+    '201':
+      description: Заказ успешно создан
+      content:
+        application/json:
+          schema:
+            $ref: '../components/create_order_response.yaml'
+    '400':
+      $ref: '../components/responses/bad_request.yaml'
+    '404':
+      $ref: '../components/responses/component_not_found.yaml'
+    '409':
+      $ref: '../components/responses/component_out_of_stock.yaml'
+    '500':
+      $ref: '../components/responses/internal_server_error.yaml'

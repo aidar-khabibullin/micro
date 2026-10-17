@@ -1,0 +1,8 @@
+description: Заказ уже оплачен или отменён
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 409
+      message: "Order is already paid or cancelled"

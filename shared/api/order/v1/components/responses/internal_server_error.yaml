@@ -1,0 +1,8 @@
+description: Внутренняя ошибка сервера
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 500
+      message: "Internal server error"

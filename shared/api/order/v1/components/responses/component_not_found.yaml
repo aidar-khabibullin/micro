@@ -1,0 +1,8 @@
+description: Компонент не найден
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 404
+      message: "Component not found"

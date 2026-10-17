@@ -1,0 +1,13 @@
+# Переиспользуемый ответ для всех HTTP 400.
+#
+# Схема ошибки одна и та же (Error), а вот example на уровне media type
+# переопределяет example из схемы — это нужно, чтобы в Swagger UI не
+# отображался один и тот же пример (с code: 400) для всех кодов ошибок.
+description: Невалидный запрос
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 400
+      message: "Invalid request parameters"

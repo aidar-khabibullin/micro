@@ -1,0 +1,27 @@
+type: object
+required:
+  - hull_uuid
+  - engine_uuid
+properties:
+  hull_uuid:
+    type: string
+    format: uuid
+    description: UUID корпуса (обязательный, v4)
+    example: "550e8400-e29b-41d4-a716-446655440001"
+  engine_uuid:
+    type: string
+    format: uuid
+    description: UUID двигателя (обязательный, v4)
+    example: "550e8400-e29b-41d4-a716-446655440003"
+  shield_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: UUID щита (опциональный, v4)
+    example: "550e8400-e29b-41d4-a716-446655440005"
+  weapon_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: UUID вооружения (опциональный, v4)
+    example: "550e8400-e29b-41d4-a716-446655440006"
